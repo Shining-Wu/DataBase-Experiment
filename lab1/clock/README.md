@@ -6,10 +6,10 @@
 ## 修改文件列表
 本次修改涉及以下源代码文件，它们均位于 src/ 目录下的相应位置：
 
-- 文件：include/common/config.h
+- 文件：common/config.h
   修改内容：修改替换算法选择宏（第42行附近），实现LRU/CLOCK全局切换。
 
-- 文件：include/buffer/buffer_pool_manager.h
+- 文件：storage/buffer_pool_manager.h
   修改内容：修改BufferPoolManager类，增加对ClockReplacer的支持。
 
 - 文件：replacer/clock_replacer.h
@@ -22,9 +22,9 @@
   修改内容：将新增的clock_replacer.cpp源文件加入编译系统。
 
 ## 详细说明
-关于每项修改的详细原因、截图和思考过程，请参阅同一文件夹中的文档：为实现CLOCK做的修改.docx
+关于每项修改的详细原因和截图，请参阅实验一报告
 
 ## 如何验证与切换算法
-1. 打开 src/include/common/config.h 文件。
+1. 打开 src/common/config.h 文件。
 2. 找到替换算法选择宏（约第42行），将其值从 "LRU" 改为 "CLOCK"。
 3. 保存文件，重新编译并运行测试，即可验证CLOCK算法是否生效。

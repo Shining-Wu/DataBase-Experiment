@@ -31,9 +31,9 @@ class QlManager {
                         Context *context);
 
     void run_dml(std::unique_ptr<AbstractExecutor> exec);
-    void QlManager::insert_into(const std::string &tab_name, std::vector<Value> values, Context *context) ;
-    void QlManager::delete_from(const std::string &tab_name, std::vector<Condition> conds, context *context);
-    void QlManager::update_set(const std::string &tab_name, std::vector<SetClause> set_clauses,
+    void insert_into(const std::string &tab_name, std::vector<Value> values, Context *context) ;
+    void delete_from(const std::string &tab_name, std::vector<Condition> conds, Context *context);
+    void update_set(const std::string &tab_name, std::vector<SetClause> set_clauses,
                            std::vector<Condition> conds, Context *context);
     
 };

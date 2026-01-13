@@ -186,7 +186,7 @@ void QlManager::insert_into(const std::string &tab_name, std::vector<Value> valu
     executor_insert->Next(); //调用Next
 }
 
-void QlManager::delete_from(const std::string &tab_name, std::vector<Condition> conds, context *context) {
+void QlManager::delete_from(const std::string &tab_name, std::vector<Condition> conds, Context *context) {
     // Get all RID to delete
     std::vector<Rid> rids;
     // make scan executor
@@ -201,14 +201,14 @@ void QlManager::delete_from(const std::string &tab_name, std::vector<Condition> 
 
 void QlManager::update_set(const std::string &tab_name, std::vector<SetClause> set_clauses,
                            std::vector<Condition> conds, Context *context) {
-    TabMeta &tab = sm_manager_->db_get_table(tab_name);
+    TabMeta &tab = sm_manager_->db_.get_table(tab_name);
     // Get raw values in set clause
     for (auto &set_clause : set_clauses) {
-        auto lhs_col = tab_get_col(set_clause.lhs.col_name);
+        auto lhs_col = tab.get_col(set_clause.lhs.col_name);
         if (lhs_col->type != set_clause.rhs.type) {
             throw IncompatibleTypeError(coltype2str(lhs_col->type), coltype2str(set_clause.rhs.type));
         }
-        set_clause.rhs.init_row(lhs_col->len);
+        set_clause.rhs.init_raw(lhs_col->len);
     }
     // Get all RID to update
     std::vector<Rid> rids;

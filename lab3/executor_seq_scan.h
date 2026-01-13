@@ -36,43 +36,40 @@ class SeqScanExecutor : public AbstractExecutor {
     }
 
     void beginTuple() override {
-        // 初始化扫描器
         scan_ = std::make_unique<RmScan>(fh_);
-
-        // 从第一条记录开始扫描
+        // 必须先调用 next() 才能让 scan 指向第一条记录或者 end
+        // 注意：具体的 RmScan 实现可能不同，如果构造函数里已经指向第一个了，就不需要第一次 next
+        // 假设 RmScan 构造后指向 Before-First，需要 next 才能到 First：
+        scan_->next(); 
+        
         while (!scan_->is_end()) {
-            Rid cur_rid = scan_->rid();
-            auto rec = fh_->get_record(cur_rid);
-
-            // 判断是否满足条件（注意是 fed_conds_）
-            if (eval_conds(rec.get(), fed_conds_, cols_)) {
-                rid_ = cur_rid;
-                return;
+            rid_ = scan_->rid();
+            // Fix: 获取 unique_ptr 后要 get() 拿到裸指针传给 eval_conds
+            auto rec = fh_->get_record(rid_, context_);
+            // Fix: eval_conds 参数顺序通常是 (cols, conds, rec)
+            if (check_conds(cols_, fed_conds_, rec.get())) {
+                return; // Found match
             }
             scan_->next();
         }
-
-        // 扫描结束仍未找到
+        // Not found
         rid_ = Rid{RM_NO_PAGE, -1};
     }
 
     void nextTuple() override {
         if (rid_.page_no == RM_NO_PAGE) return;
-
-        // 从当前记录的下一条开始扫
+        
+        // 移动到下一条
         scan_->next();
-
+        
         while (!scan_->is_end()) {
-            Rid cur_rid = scan_->rid();
-            auto rec = fh_->get_record(cur_rid);
-
-            if (eval_conds(rec.get(), fed_conds_, cols_)) {
-                rid_ = cur_rid;
+            rid_ = scan_->rid();
+            auto rec = fh_->get_record(rid_, context_);
+            if (check_conds(cols_, fed_conds_, rec.get())) {
                 return;
             }
             scan_->next();
         }
-
         rid_ = Rid{RM_NO_PAGE, -1};
     }
 
@@ -80,29 +77,24 @@ class SeqScanExecutor : public AbstractExecutor {
         if (rid_.page_no == RM_NO_PAGE) {
             return nullptr;
         }
-        auto rec = fh_->get_record(rid_);
+        // 1. 获取当前记录
+        auto rec = fh_->get_record(rid_, context_);
+        // 2. 移动游标寻找下一条满足条件的，为下一次 Next 做准备
         nextTuple();
+        // 3. 返回当前记录
         return rec;
     }
 
     void feed(const std::map<TabCol, Value> &feed_dict) {
-        fed_conds_.clear();
-
-        for (auto &cond : conds_) {
-            // 如果右值是列（Join 条件）
-            if (!cond.is_rhs_val) {
+        fed_conds_ = conds_;
+        for (auto &cond : fed_conds_) {
+            if (!cond.is_rhs_val && cond.rhs_col.tab_name != tab_name_) {
+                // 这是一个连接条件 (TableA.a = TableB.b)
                 auto it = feed_dict.find(cond.rhs_col);
                 if (it != feed_dict.end()) {
-                    // 用外表当前 tuple 的值替换 RHS
-                    Condition new_cond = cond;
-                    new_cond.is_rhs_val = true;
-                    new_cond.rhs_val = it->second;
-                    fed_conds_.push_back(new_cond);
+                    cond.is_rhs_val = true;
+                    cond.rhs_val = it->second;
                 }
-                // 如果 feed_dict 里没有这个列，跳过
-            } else {
-                // 原本就是常量条件，直接保留
-                fed_conds_.push_back(cond);
             }
         }
     }

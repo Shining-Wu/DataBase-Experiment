@@ -28,19 +28,53 @@ class UpdateExecutor : public AbstractExecutor {
         context_ = context;
     }
     std::unique_ptr<RmRecord> Next() override {
-        // Get all necessary index files
-        std::vector<LxIndexHandle *> lhs(tab_cols.size(), nullptr);
-        for (auto &set_clause : set_clauses) {
-            auto lhs_col = tab_get_col(set_clause.lhs.col_name);
-            if (lhs_col->index) {
-                size_t lhs_col_idx = lhs_col - tab_cols.begin();
-            }
-        }
-        // Update each rid from record file and index file
         for (auto &rid : rids_) {
-            auto rec = fh->get_record(rid, context_);
-            RmRecord update_record(rec->size);
-            memcpy(update_record.data, rec->data, rec->size);
+            // 1. 获取旧记录
+            auto rec = fh_->get_record(rid, context_);
+            
+            // 2. 构造新记录（先拷贝旧的）
+            RmRecord new_rec(fh_->get_file_hdr().record_size);
+            memcpy(new_rec.data, rec->data, new_rec.size);
+
+            // 3. 应用 SET 子句更新新记录的数据
+            for (auto &set_clause : set_clauses_) {
+                auto lhs_col = tab_.get_col(set_clause.lhs.col_name);
+                // Value 拷贝到 new_rec
+                memcpy(new_rec.data + lhs_col->offset, set_clause.rhs.raw->data, lhs_col->len);
+            }
+
+            // 4. 更新索引 (策略：删除旧 Key，插入新 Key)
+            // 优化：其实只有当索引列被修改时才需要动索引，但为了简单，这里全部重做
+            for (size_t i = 0; i < tab_.indexes.size(); ++i) {
+                auto &index = tab_.indexes[i];
+                auto ih = sm_manager_->ihs_.at(
+                    sm_manager_->get_ix_manager()->get_index_name(tab_name_, index.cols)
+                ).get();
+
+                // --- 删除旧索引 ---
+                char *old_key = new char[index.col_tot_len];
+                int offset = 0;
+                for (size_t j = 0; j < index.col_num; ++j) {
+                    memcpy(old_key + offset, rec->data + index.cols[j].offset, index.cols[j].len);
+                    offset += index.cols[j].len;
+                }
+                ih->delete_entry(old_key, context_->txn_);
+                delete[] old_key;
+
+                // --- 插入新索引 ---
+                char *new_key = new char[index.col_tot_len];
+                offset = 0;
+                for (size_t j = 0; j < index.col_num; ++j) {
+                    memcpy(new_key + offset, new_rec.data + index.cols[j].offset, index.cols[j].len);
+                    offset += index.cols[j].len;
+                }
+                // 注意：这里仍然使用相同的 rid，因为我们是在原位 update_record
+                ih->insert_entry(new_key, rid, context_->txn_);
+                delete[] new_key;
+            }
+
+            // 5. 更新数据文件
+            fh_->update_record(rid, new_rec.data, context_);
         }
         return nullptr;
     }

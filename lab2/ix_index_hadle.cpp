@@ -1,4 +1,4 @@
-#include "ix_index_handle.h"
+#include "index/ix_index_handle.h"
 
 #include "ix_scan.h"
 
@@ -223,7 +223,7 @@ int IxNodeHandle::remove(const char *key) {
 IxIndexHandle::IxIndexHandle(DiskManager *disk_manager, BufferPoolManager *buffer_pool_manager, int fd)
     : disk_manager_(disk_manager), buffer_pool_manager_(buffer_pool_manager), fd_(fd) {
     // init file_hdr_
-    disk_manager_->read_page(fd, IX_FILE_HDR_PAGE, (char *)&file_hdr_, sizeof(file_hdr_));
+    // disk_manager_->read_page(fd, IX_FILE_HDR_PAGE, (char *)&file_hdr_, sizeof(file_hdr_));
     char* buf = new char[PAGE_SIZE];
     memset(buf, 0, PAGE_SIZE);
     disk_manager_->read_page(fd, IX_FILE_HDR_PAGE, buf,PAGE_SIZE);
@@ -588,8 +588,25 @@ Rid IxIndexHandle::get_rid(const Iid &iid) const {
  * 可用*(int *)key转换回去
  */
 Iid IxIndexHandle::lower_bound(const char *key) {
+    // 1. 找到包含 key 的叶子节点
+    std::pair<IxNodeHandle *, bool> result = find_leaf_page(key, Operation::FIND, nullptr, false);
+    IxNodeHandle *node = result.first;
 
-    return Iid{-1, -1};
+    // 2. 在节点内查找第一个 >= key 的位置
+    int slot_no = node->lower_bound(key);
+    
+    // 3. 如果找得位置 == size，说明 key 比当前节点所有值都大
+    // 但是，因为 find_leaf_page 保证找的是"包含 key"的节点，
+    // 只有一种情况：这个 key 比整棵树都大，或者需要跳到下一个兄弟节点（逻辑上 find_leaf_page 会处理好定位）
+    // 这里简单处理：直接返回该位置
+    Iid iid = {node->get_page_no(), slot_no};
+
+    // 4. Unpin
+    buffer_pool_manager_->unpin_page(node->get_page_id(), false);
+    if (result.second) { root_latch_.unlock(); } // 如果加了锁要释放
+    delete node; // 释放 handle 内存
+
+    return iid;
 }
 
 /**
@@ -598,8 +615,17 @@ Iid IxIndexHandle::lower_bound(const char *key) {
  * @return Iid
  */
 Iid IxIndexHandle::upper_bound(const char *key) {
+    std::pair<IxNodeHandle *, bool> result = find_leaf_page(key, Operation::FIND, nullptr, false);
+    IxNodeHandle *node = result.first;
 
-    return Iid{-1, -1};
+    int slot_no = node->upper_bound(key);
+    Iid iid = {node->get_page_no(), slot_no};
+
+    buffer_pool_manager_->unpin_page(node->get_page_id(), false);
+    if (result.second) { root_latch_.unlock(); }
+    delete node;
+
+    return iid;
 }
 
 IxNodeHandle *IxIndexHandle::create_node() {
@@ -669,4 +695,38 @@ void IxIndexHandle::maintain_child(IxNodeHandle *node, int child_idx) {
     }
 }
 
+/**
+ * @brief 辅助函数：从缓冲池获取一个节点并封装成句柄
+ */
+IxNodeHandle *IxIndexHandle::fetch_node(int page_no) const {
+    PageId page_id = {.fd = fd_, .page_no = (page_id_t)page_no};
+    Page *page = buffer_pool_manager_->fetch_page(page_id);
+    if (page == nullptr) {
+        // 这是一个严重的错误，意味着页号无效或缓冲池已满且不可置换
+        assert(false && "FetchPage failed in fetch_node: Page not found");
+    }
+    return new IxNodeHandle(file_hdr_, page);
+}
 
+/**
+ * @brief 获取 B+ 树的第一个叶子节点的 Iid (用于 scan begin)
+ */
+Iid IxIndexHandle::leaf_begin() const {
+    std::pair<IxNodeHandle *, bool> result = 
+        const_cast<IxIndexHandle *>(this)->find_leaf_page(nullptr, Operation::FIND, nullptr, true);
+    
+    IxNodeHandle *leaf = result.first;
+    Iid iid = Iid{leaf->get_page_no(), 0};
+    
+    buffer_pool_manager_->unpin_page(leaf->get_page_id(), false);
+    delete leaf;
+    
+    return iid;
+}
+
+/**
+ * @brief 获取 B+ 树的结束 Iid (用于 scan end)
+ */
+Iid IxIndexHandle::leaf_end() const {
+    return Iid{HEADER_PAGE_ID, -1}; 
+}
